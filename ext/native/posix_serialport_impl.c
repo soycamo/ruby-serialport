@@ -29,6 +29,12 @@
 #include <termios.h> /* POSIX terminal control definitions */
 #include <sys/ioctl.h>
 
+#if defined(OS_LINUX)
+#include <linux/serial.h>
+#elif defined(OS_DARWIN)
+#include <IOKit/serial/ioss.h>
+#endif
+
 #ifdef CRTSCTS
 #define HAVE_FLOWCONTROL_HARD 1
 #else
@@ -162,6 +168,157 @@ VALUE sp_create_impl(class, _port)
    return (VALUE) sp;
 }
 
+#if defined(OS_LINUX)
+
+/*
+ * :nodoc: Set a non-standard baud rate on the termios provided.
+ *
+ * Returns 0 on success
+ */
+static int set_custom_baud_rate(int fd, int baud)
+{
+   struct serial_struct serial_info;
+   int actual_speed;
+   int divisor;
+
+   if (baud <= 0) {
+      rb_raise(rb_eArgError, "invalid baud rate");
+   } else if (ioctl(fd, TIOCGSERIAL, &serial_info) < 0) {
+      rb_raise(rb_eArgError, "unable to execute TIOCGSERIAL ioctl for custom baud");
+   } else if (baud > serial_info.baud_base) {
+      rb_raise(rb_eArgError, "custom baud rate is too high");
+   }
+   
+   divisor = serial_info.baud_base / baud;
+
+   /* A possible future improvement would be to calculate the actual
+    * baud speed that will be set and make sure it differs from the
+    * intended speed by no more than 2-5% or so. The baud_base when
+    * using FTDI chips appears to be 24 MHz, so this isn't much
+    * of a concern unless you're trying to use very high baud rates
+    * or communicating with systems using very non-standard crystals
+    */
+
+   // actual_speed = serial_info.baud_base / divisor;
+
+   serial_info.flags &= ~ASYNC_SPD_MASK;
+   serial_info.flags |= ASYNC_SPD_CUST;
+   serial_info.custom_divisor = divisor;
+
+   if (ioctl(fd, TIOCSSERIAL, &serial_info) < 0)
+   {
+      rb_raise(rb_eArgError, "unable to set custom baud rate");
+   }
+
+   return 0;
+}
+
+/*
+ * :nodoc: Clear the custom baud rate fields from the provided termios.
+ *
+ * Returns 0 on success
+ */
+static int clear_custom_baud_rate(int fd)
+{
+   struct serial_struct serial_info;
+
+   if (ioctl(fd, TIOCGSERIAL, &serial_info) < 0) {
+      rb_raise(rb_eArgError, "unable to execute TIOCGSERIAL ioctl for custom baud");
+   }
+
+   if (!(serial_info.flags & ASYNC_SPD_CUST) &&
+        (serial_info.custom_divisor == 0))
+   {
+      return 0;        
+   }
+
+   serial_info.flags &= ~ASYNC_SPD_CUST;
+   serial_info.custom_divisor = 0;
+
+   if (ioctl(fd, TIOCSSERIAL, &serial_info) < 0)
+   {
+      rb_raise(rb_eArgError, "unable to set custom baud rate");
+   }
+
+   return 0;
+}
+
+/*
+ * :nodoc: Returns the baud rate of the file descriptor provided only if it
+ * is set as a custom baud rate.
+ *
+ * Returns 0 if a custom baud rate is not set
+ */
+static int get_custom_baud_rate(int fd)
+{
+   struct serial_struct serial_info;
+
+   if (ioctl(fd, TIOCGSERIAL, &serial_info) < 0) {
+      return 0;
+   } else if (!(serial_info.flags & ASYNC_SPD_CUST)) {
+      return 0;
+   } else if (serial_info.custom_divisor > 0) {
+      return serial_info.baud_base / serial_info.custom_divisor;
+   } else {
+      return 0;
+   }
+}
+
+#elif defined(OS_DARWIN)
+
+/*
+ * :nodoc: Sets the custom baud rate on the provided file descriptor and
+ * stores the baud rate in a hidden instance variable for future use
+ *
+ * Returns 0 on success
+ */
+static int set_custom_baud_rate(VALUE self, int fd, int baud)
+{
+   speed_t speed = baud;
+   
+   if (ioctl(fd, IOSSIOSPEED, &speed) < 0) {
+      rb_raise(rb_eArgError, "unable to set custom baud rate");
+   }
+
+   rb_iv_set(self, "custom_baud", INT2FIX(baud));
+   return 0;
+}
+
+/*
+ * :nodoc: Resets the baud rate on the provided termios to 9600 and clears the
+ * stored custom baud rate variable
+ */
+static void clear_custom_baud_rate(VALUE self, struct termios *serial_info)
+{
+   rb_iv_set(self, "custom_baud", INT2FIX(0));
+
+   cfsetispeed(serial_info, B9600);
+   cfsetospeed(serial_info, B9600);
+}
+
+/*
+ * :nodoc: Retrieves the stored custom baud rate variable.
+ *
+ * Returns the custom baud rate if set, 0 otherwise
+ */
+static int get_custom_baud_rate(VALUE self)
+{
+   VALUE baud;
+
+   baud = rb_iv_get(self, "custom_baud");
+
+   if (FIXNUM_P(baud))
+   {
+      return FIX2INT(baud);
+   }
+   else
+   {
+      return 0;
+   }
+}
+
+#endif
+
 VALUE sp_set_modem_params_impl(argc, argv, self)
    int argc;
    VALUE *argv, self;
@@ -169,9 +326,15 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
    int fd;
    struct termios params;
    VALUE _data_rate, _data_bits, _parity, _stop_bits;
+   VALUE _flow_control, _read_timeout;
    int use_hash = 0;
    int data_rate, data_bits;
+   int flow_control, read_timeout;
    _data_rate = _data_bits = _parity = _stop_bits = Qnil;
+   _flow_control = _read_timeout = Qnil;
+#if defined(OS_LINUX) || defined(OS_DARWIN)
+   int custom_baud_rate = 0;
+#endif
 
    if (argc == 0)
    {
@@ -185,6 +348,8 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
       _data_bits = rb_hash_aref(argv[0], sDataBits);
       _stop_bits = rb_hash_aref(argv[0], sStopBits);
       _parity = rb_hash_aref(argv[0], sParity);
+      _flow_control = rb_hash_aref(argv[0], sFlowControl);
+      _read_timeout = rb_hash_aref(argv[0], sReadTimeout);
    }
 
    fd = get_fd_helper(self);
@@ -193,6 +358,11 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
       rb_sys_fail(sTcgetattr);
    }
 
+#if defined(OS_DARWIN)
+   custom_baud_rate = get_custom_baud_rate(self);
+   clear_custom_baud_rate(self, &params);
+#endif
+
    if (!use_hash)
    {
       _data_rate = argv[0];
@@ -200,9 +370,14 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_data_rate))
    {
-      goto SkipDataRate;
+      goto SetDataBits;
    }
    Check_Type(_data_rate, T_FIXNUM);
+
+   if (FIX2INT(_data_rate) <= 0)
+   {
+      rb_raise(rb_eArgError, "invalid baud rate");
+   }
 
    switch(FIX2INT(_data_rate))
    {
@@ -233,15 +408,33 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
 #ifdef B230400
       case 230400: data_rate = B230400; break;
 #endif
-
       default:
-                   rb_raise(rb_eArgError, "unknown baud rate");
-                   break;
+#if defined(OS_LINUX) || defined(OS_DARWIN)
+         custom_baud_rate = FIX2INT(_data_rate);
+         if (custom_baud_rate <= 0) {
+            rb_raise(rb_eArgError, "invalid baud rate");
+         } else if (custom_baud_rate > 24000000) {
+            rb_raise(rb_eArgError, "baud rate too high");
+         }
+         /* data_rate must be set to B38400 for Linux to honor custom rates */
+         data_rate = B38400;
+#else
+         rb_raise(rb_eArgError, "unknown baud rate");
+#endif
+         break;
    }
+
+#if defined(OS_LINUX)
+   /* 
+    * If a custom baud rate has been defined, clear it. Otherwise it will
+    * override any standard baud rate settings applied below.
+    */
+   clear_custom_baud_rate(fd);
+#endif
    cfsetispeed(&params, data_rate);
    cfsetospeed(&params, data_rate);
 
-   SkipDataRate:
+   SetDataBits:
 
    if (!use_hash)
    {
@@ -250,7 +443,7 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_data_bits))
    {
-      goto SkipDataBits;
+      goto SetStopBits;
    }
    Check_Type(_data_bits, T_FIXNUM);
 
@@ -275,7 +468,7 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
    params.c_cflag &= ~CSIZE;
    params.c_cflag |= data_bits;
 
-   SkipDataBits:
+   SetStopBits:
 
    if (!use_hash)
    {
@@ -284,7 +477,7 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_stop_bits))
    {
-      goto SkipStopBits;
+      goto SetParity;
    }
 
    Check_Type(_stop_bits, T_FIXNUM);
@@ -302,7 +495,7 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
          break;
    }
 
-   SkipStopBits:
+   SetParity:
 
    if (!use_hash)
    {
@@ -312,7 +505,7 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_parity))
    {
-      goto SkipParity;
+      goto SetFlowControl;
    }
 
    Check_Type(_parity, T_FIXNUM);
@@ -338,12 +531,102 @@ VALUE sp_set_modem_params_impl(argc, argv, self)
          break;
    }
 
-   SkipParity:
+   SetFlowControl:
+
+   if (!use_hash)
+   {
+      _flow_control = (argc >= 5 ? argv[4] : Qnil);
+   }
+
+   if (NIL_P(_flow_control))
+   {
+      goto SetReadTimeout;
+   }
+
+   Check_Type(_flow_control, T_FIXNUM);
+
+   flow_control = FIX2INT(_flow_control);
+   if (flow_control != NONE &&
+       flow_control != SOFT &&
+       flow_control != HARD &&
+       flow_control != (HARD | SOFT))
+   {
+      rb_raise(rb_eArgError, "invalid flow control");
+   }
+
+   if (flow_control & HARD)
+   {
+#ifdef HAVE_FLOWCONTROL_HARD
+      params.c_cflag |= CRTSCTS;
+   }
+   else
+   {
+      params.c_cflag &= ~CRTSCTS;
+   }
+#else
+      rb_raise(rb_eIOError, "Hardware flow control not supported");
+   }
+#endif
+
+   if (flow_control & SOFT)
+   {
+      params.c_iflag |= (IXON | IXOFF | IXANY);
+   }
+   else
+   {
+      params.c_iflag &= ~(IXON | IXOFF | IXANY);
+   }
+
+   SetReadTimeout:
+
+   if (!use_hash)
+   {
+      _read_timeout = (argc >= 6 ? argv[5] : Qnil);
+   }
+
+   if (NIL_P(_read_timeout))
+   {
+      goto SaveSettings;
+   }
+
+   Check_Type(_read_timeout, T_FIXNUM);
+   read_timeout = FIX2INT(_read_timeout);
+
+   if (read_timeout < 0)
+   {
+      params.c_cc[VTIME] = 0;
+      params.c_cc[VMIN] = 0;
+   }
+   else if (read_timeout == 0)
+   {
+      params.c_cc[VTIME] = 0;
+      params.c_cc[VMIN] = 1;
+   }
+   else
+   {
+      params.c_cc[VTIME] = (read_timeout + 50) / 100;
+      params.c_cc[VMIN] = 0;
+   }
+
+   SaveSettings:
 
    if (tcsetattr(fd, TCSANOW, &params) == -1)
    {
       rb_sys_fail(sTcsetattr);
    }
+
+#if defined(OS_DARWIN)
+   if (custom_baud_rate != 0)
+   {
+      set_custom_baud_rate(self, fd, custom_baud_rate);
+   }
+#elif defined(OS_LINUX)
+   if (custom_baud_rate != 0)
+   {
+      set_custom_baud_rate(fd, custom_baud_rate);
+   }
+#endif
+
    return argv[0];
 }
 
@@ -389,6 +672,15 @@ void get_modem_params_impl(self, mp)
 #ifdef B230400
       case B230400: mp->data_rate = 230400; break;
 #endif
+#if defined(OS_LINUX)
+      default:
+         mp->data_rate = get_custom_baud_rate(fd);
+         break;
+#elif defined(OS_DARWIN)
+      default:
+         mp->data_rate = get_custom_baud_rate(self);
+         break;
+#endif
    }
 
    switch(params.c_cflag & CSIZE)
@@ -424,6 +716,29 @@ void get_modem_params_impl(self, mp)
    {
       mp->parity = EVEN;
    }
+
+   mp->flow_control = NONE;
+
+#ifdef HAVE_FLOWCONTROL_HARD
+   if (params.c_cflag & CRTSCTS)
+   {
+      mp->flow_control += HARD;
+   }
+#endif
+
+   if (params.c_iflag & (IXON | IXOFF | IXANY))
+   {
+      mp->flow_control += SOFT;
+   }
+
+   if (params.c_cc[VTIME] == 0 && params.c_cc[VMIN] == 0)
+   {
+      mp->read_timeout = -1;
+   }
+   else
+   {
+      mp->read_timeout = params.c_cc[VTIME] * 100;
+   }
 }
 
 VALUE sp_set_flow_control_impl(self, val)
@@ -442,6 +757,15 @@ VALUE sp_set_flow_control_impl(self, val)
    }
 
    flowc = FIX2INT(val);
+
+   if (flowc != NONE &&
+       flowc != SOFT &&
+       flowc != HARD &&
+       flowc != (HARD | SOFT))
+   {
+      rb_raise(rb_eArgError, "invalid flow control");
+   }
+
    if (flowc & HARD)
    {
 #ifdef HAVE_FLOWCONTROL_HARD

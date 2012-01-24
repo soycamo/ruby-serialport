@@ -21,7 +21,7 @@
 #ifndef _RUBY_SERIAL_PORT_H_
 #define _RUBY_SERIAL_PORT_H_
 
-#define RUBY_SERIAL_PORT_VERSION   "1.0.4"
+#define RUBY_SERIAL_PORT_VERSION   "1.1.0"
 
 #include <ruby.h>    /* ruby inclusion */
 #ifdef RUBY_1_9      /* ruby io inclusion */
@@ -36,6 +36,11 @@ struct modem_params
    int data_bits;
    int stop_bits;
    int parity;
+   int flow_control;
+   int read_timeout;
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+   int write_timeout;
+#endif
 };
 
 struct line_signals
@@ -76,6 +81,10 @@ struct line_signals
 #endif
 
 extern VALUE sBaud, sDataBits, sStopBits, sParity; /* strings */
+extern VALUE sFlowControl, sReadTimeout;
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+extern VALUE sWriteTimeout;
+#endif
 extern VALUE sRts, sDtr, sCts, sDsr, sDcd, sRi;
 
 /* Implementation specific functions. */

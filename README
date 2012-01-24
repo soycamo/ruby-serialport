@@ -6,12 +6,13 @@ Ruby/SerialPort is a Ruby library that provides a class for using
 RS-232 serial ports.  This class also contains low-level functions to
 check and set the current state of the signals on the line.
 
-The native Windows version of this library supports Microsoft's Visual C++, Borland's C++, and MinGW compilers.
+The native Windows version of this library supports Microsoft's Visual C++,
+Borland's C++, and MinGW compilers.
 
 -- Installation --
 
-This gem is hosted at Gemcutter. Before you can install this, or any other Gemcutter gem you must
-add it as a gem source:
+This gem is hosted at Gemcutter. Before you can install this, or any other
+Gemcutter gem you must add it as a gem source:
   gem sources -a http://gemcutter.org
 
 Then you can install the gem as normal:
@@ -23,6 +24,10 @@ Then you can install the gem as normal:
 
 Ruby's copy of miniterm.c !
 
+* test/test_serialport.rb
+
+Unit tests for all functions
+
 
 -- API --
 
@@ -30,7 +35,7 @@ Ruby's copy of miniterm.c !
 
     ** Class constants **
 
-       VERSION -> aString (this release is "0.6")
+       VERSION -> aString (this release is "1.1.0")
        NONE, HARD, SOFT, SPACE, MARK, EVEN, ODD -> anInteger
 
     ** Class methods **
@@ -46,15 +51,25 @@ Ruby's copy of miniterm.c !
 
         Optional modem_parameters:
 
-        baudrate -> anInteger: from 50 to 256000, depends on platform.
+        baud -> anInteger: from 50 to 256000, depends on platform.
 
-        databits -> anInteger: from 5 to 8 (4 is allowed on Windows)
+        data_bits -> anInteger: from 5 to 8 (4 is allowed on Windows)
 
-        stopbits -> anInteger: 1 or 2 (1.5 is not supported)
+        stop_bits -> anInteger: 1 or 2 (1.5 is not supported)
 
         parity -> anInteger: SerialPort::NONE, SerialPort::EVEN,
                   SerialPort::ODD, SerialPort::MARK, SerialPort::SPACE
                   (MARK and SPACE are not supported on Posix)
+
+        flow_control -> anInteger: SerialPort::NONE, SerialPort::SOFT,
+                        SerialPort::HARD or
+                        SerialPort::SOFT | SerialPort::HARD
+
+        read_timeout -> anInteger: Read timeout in milliseconds. Rounded to
+                        nearest tenth of a second on POSIX platforms
+
+        write_timeout -> anInteger: Write timeout in milliseconds. Windows
+                         platforms only
 
         Raise an argError on bad argument.
 
@@ -73,7 +88,8 @@ Ruby's copy of miniterm.c !
       * set_modem_params(baudrate [, databits [, stopbits [, parity]]])
 
         Get and set the modem parameters.  Hash keys are "baud", "data_bits",
-        "stop_bits", and "parity" (see above).
+        "stop_bits", "parity", "flow_control", "read_timeout", and
+        "write_timeout" (see above).
 
         Parameters not present in the hash or set to nil remain unchanged.
         Default parameter values for the set_modem_params method are:
@@ -155,3 +171,4 @@ Alan Stern <stern@rowland.harvard.edu>
 Tobin Richard <tobin.richard@gmail.com>
 Hector Parra <hector@hectorparra.com>
 Ryan C. Payne <rpayne-oss@bullittsystems.com>
+Tom Stokes <tomstokes@gmail.com>

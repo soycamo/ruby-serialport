@@ -1,3 +1,13 @@
+1.1.0 => 01/11/2012:	[NEW] [OS X] Added support for custom baud rates
+						[NEW] [Linux] Added support for custom baud rates
+						[NEW] Added unit tests
+						[NEW] Added "flow_control" "read_timeout" and "write_timeout" to modem params hash
+						[FIXED] Fixed symbol not found errors when using RVM on OS X (removed static modifier on functions)
+						[FIXED] Read timeout now returns correct values for all settings
+						Additional argument checking on POSIX platform
+						Minor code cleanup
+						Fixed errors in README and added new features
+
 1.0.4 => 07/17/2010:	[FIXED] [Windows] No longer restricted to specific bitrates
 						[FIXED] [Windows] Removed potentially insecure sprintf() use
 						[FIXED] [Windows] Workaround for rb_sys_fail not checking GetLastError()

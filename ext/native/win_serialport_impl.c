@@ -130,7 +130,8 @@ VALUE RB_SERIAL_EXPORT sp_create_impl(class, _port)
       rb_raise(rb_eArgError, "not a serial port");
    }
 
-   dcb.DCBlength = sizeof(dcb);
+   ZeroMemory(&dcb, sizeof(DCB));
+   dcb.DCBlength = sizeof(DCB);
    if (GetCommState(fh, &dcb) == 0)
    {
       close(fd);
@@ -169,9 +170,12 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
 {
    HANDLE fh;
    DCB dcb;
+   COMMTIMEOUTS ctout;
    VALUE _data_rate, _data_bits, _parity, _stop_bits;
+   VALUE _flow_control, _read_timeout, _write_timeout;
    int use_hash = 0;
    int data_rate, data_bits, parity;
+   int flow_control, read_timeout, write_timeout;
 
    if (argc == 0)
    {
@@ -184,13 +188,21 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
       _data_bits = rb_hash_aref(argv[0], sDataBits);
       _stop_bits = rb_hash_aref(argv[0], sStopBits);
       _parity = rb_hash_aref(argv[0], sParity);
+      _flow_control = rb_hash_aref(argv[0], sFlowControl);
+      _read_timeout = rb_hash_aref(argv[0], sReadTimeout);
+      _write_timeout = rb_hash_aref(argv[0], sWriteTimeout);
    }
 
    fh = get_handle_helper(self);
-   dcb.DCBlength = sizeof(dcb);
+   ZeroMemory(&dcb, sizeof(DCB));
+   dcb.DCBlength = sizeof(DCB);
    if (GetCommState(fh, &dcb) == 0)
    {
       _rb_win32_fail(sGetCommState);
+   }
+   else if (GetCommTimeouts(fh, &ctout) == 0)
+   {
+      _rb_win32_fail(sGetCommTimeouts);
    }
 
    if (!use_hash)
@@ -200,15 +212,21 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_data_rate))
    {
-      goto SkipDataRate;
+      goto SetDataBits;
    }
 
    Check_Type(_data_rate, T_FIXNUM);
 
    data_rate = FIX2INT(_data_rate);
+
+   if (data_rate <= 0 || data_rate >= 24000000)
+   {
+      rb_raise(rb_eArgError, "invalid baud rate");
+   }
+
    dcb.BaudRate = data_rate;
 
-   SkipDataRate:
+   SetDataBits:
 
    if (!use_hash)
    {
@@ -217,7 +235,7 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_data_bits))
    {
-      goto SkipDataBits;
+      goto SetStopBits;
    }
 
    Check_Type(_data_bits, T_FIXNUM);
@@ -232,7 +250,7 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
       rb_raise(rb_eArgError, "unknown character size");
    }
 
-   SkipDataBits:
+   SetStopBits:
 
    if (!use_hash)
    {
@@ -241,7 +259,7 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_stop_bits))
    {
-      goto SkipStopBits;
+      goto SetParity;
    }
 
    Check_Type(_stop_bits, T_FIXNUM);
@@ -259,7 +277,7 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
          break;
    }
 
-   SkipStopBits:
+   SetParity:
 
    if (!use_hash)
    {
@@ -269,7 +287,7 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
 
    if (NIL_P(_parity))
    {
-      goto SkipParity;
+      goto SetFlowControl;
    }
 
    Check_Type(_parity, T_FIXNUM);
@@ -290,7 +308,120 @@ VALUE RB_SERIAL_EXPORT sp_set_modem_params_impl(argc, argv, self)
          break;
    }
 
-   SkipParity:
+   SetFlowControl:
+
+   if (!use_hash)
+   {
+      _flow_control = (argc >= 5 ? argv[4] : Qnil);
+   }
+
+   if (NIL_P(_flow_control))
+   {
+      goto SetReadTimeout;
+   }
+
+   flow_control = FIX2INT(_flow_control);
+
+   if (flow_control != NONE &&
+       flow_control != SOFT &&
+       flow_control != HARD &&
+       flow_control != (HARD | SOFT))
+   {
+      rb_raise(rb_eArgError, "invalid flow control");
+   }
+
+   if (flow_control & HARD)
+   {
+      dcb.fRtsControl = RTS_CONTROL_HANDSHAKE;
+      dcb.fOutxCtsFlow = TRUE;
+   }
+   else
+   {
+      dcb.fRtsControl = RTS_CONTROL_ENABLE;
+      dcb.fOutxCtsFlow = FALSE;
+   }
+
+   if (flow_control & SOFT)
+   {
+      dcb.fOutX = dcb.fInX = TRUE;
+   }
+   else
+   {
+      dcb.fOutX = dcb.fInX = FALSE;
+   }
+
+   SetReadTimeout:
+
+   if (!use_hash)
+   {
+      _read_timeout = (argc >= 6 ? argv[5] : Qnil);
+   }
+
+   if (NIL_P(_read_timeout))
+   {
+      goto SetWriteTimeout;
+   }
+
+   Check_Type(_read_timeout, T_FIXNUM);
+   read_timeout = FIX2INT(_read_timeout);
+
+   if (read_timeout < 0)
+   {
+      ctout.ReadIntervalTimeout = MAXDWORD;
+      ctout.ReadTotalTimeoutMultiplier = 0;
+      ctout.ReadTotalTimeoutConstant = 0;
+   }
+   else if (read_timeout == 0)
+   {
+      ctout.ReadIntervalTimeout = MAXDWORD;
+      ctout.ReadTotalTimeoutMultiplier = MAXDWORD;
+      ctout.ReadTotalTimeoutConstant = MAXDWORD - 1;
+   }
+   else
+   {
+      ctout.ReadIntervalTimeout = read_timeout;
+      ctout.ReadTotalTimeoutMultiplier = 0;
+      ctout.ReadTotalTimeoutConstant = read_timeout;
+   }
+
+   SetWriteTimeout:
+
+   if (!use_hash)
+   {
+      _write_timeout = (argc >= 7 ? argv[6] : Qnil);
+   }
+
+   if (NIL_P(_write_timeout))
+   {
+      goto SaveSettings;
+   }
+
+   Check_Type(_write_timeout, T_FIXNUM);
+   write_timeout = FIX2INT(_write_timeout);
+
+   fh = get_handle_helper(self);
+   if (GetCommTimeouts(fh, &ctout) == 0)
+   {
+      _rb_win32_fail(sGetCommTimeouts);
+   }
+
+   if (write_timeout <= 0)
+   {
+      ctout.WriteTotalTimeoutMultiplier = 0;
+      ctout.WriteTotalTimeoutConstant = 0;
+   }
+   else
+   {
+      ctout.WriteTotalTimeoutMultiplier = write_timeout;
+      ctout.WriteTotalTimeoutConstant = 0;
+   }
+
+   SaveSettings:
+
+   if (SetCommTimeouts(fh, &ctout) == 0)
+   {
+      _rb_win32_fail(sSetCommTimeouts);
+   }
 
    if (SetCommState(fh, &dcb) == 0)
    {
@@ -306,18 +437,52 @@ void RB_SERIAL_EXPORT get_modem_params_impl(self, mp)
 {
    HANDLE fh;
    DCB dcb;
+   COMMTIMEOUTS ctout;
 
    fh = get_handle_helper(self);
-   dcb.DCBlength = sizeof(dcb);
+   ZeroMemory(&dcb, sizeof(DCB));
+   dcb.DCBlength = sizeof(DCB);
    if (GetCommState(fh, &dcb) == 0)
    {
       _rb_win32_fail(sGetCommState);
+   }
+   if (GetCommTimeouts(fh, &ctout) == 0)
+   {
+      _rb_win32_fail(sGetCommTimeouts);
    }
 
    mp->data_rate = dcb.BaudRate;
    mp->data_bits = dcb.ByteSize;
    mp->stop_bits = (dcb.StopBits == ONESTOPBIT ? 1 : 2);
    mp->parity = dcb.Parity;
+
+   mp->flow_control = 0;
+   if (dcb.fOutxCtsFlow)
+   {
+      mp->flow_control += HARD;
+   }
+
+   if (dcb.fOutX)
+   {
+      mp->flow_control += SOFT;
+   }
+
+   switch (ctout.ReadTotalTimeoutConstant)
+   {
+      case 0:
+         mp->read_timeout = -1;
+         break;
+      case MAXDWORD:
+      case MAXDWORD - 1:
+         mp->read_timeout = 0;
+         break;
+      default:
+         mp->read_timeout = ctout.ReadTotalTimeoutConstant;
+         break;
+   }
+
+   mp->write_timeout = ctout.WriteTotalTimeoutMultiplier;
+
 }
 
 VALUE RB_SERIAL_EXPORT sp_set_flow_control_impl(self, val)
@@ -330,13 +495,23 @@ VALUE RB_SERIAL_EXPORT sp_set_flow_control_impl(self, val)
    Check_Type(val, T_FIXNUM);
 
    fh = get_handle_helper(self);
-   dcb.DCBlength = sizeof(dcb);
+   ZeroMemory(&dcb, sizeof(DCB));
+   dcb.DCBlength = sizeof(DCB);
    if (GetCommState(fh, &dcb) == 0)
    {
       _rb_win32_fail(sGetCommState);
    }
 
    flowc = FIX2INT(val);
+
+   if (flowc != NONE &&
+       flowc != SOFT &&
+       flowc != HARD &&
+       flowc != (HARD | SOFT))
+   {
+      rb_raise(rb_eArgError, "invalid flow control");
+   }
+
    if (flowc & HARD)
    {
       dcb.fRtsControl = RTS_CONTROL_HANDSHAKE;
@@ -373,7 +548,8 @@ VALUE RB_SERIAL_EXPORT sp_get_flow_control_impl(self)
    DCB dcb;
 
    fh = get_handle_helper(self);
-   dcb.DCBlength = sizeof(dcb);
+   ZeroMemory(&dcb, sizeof(DCB));
+   dcb.DCBlength = sizeof(DCB);
    if (GetCommState(fh, &dcb) == 0)
    {
       _rb_win32_fail(sGetCommState);
@@ -453,6 +629,7 @@ VALUE RB_SERIAL_EXPORT sp_get_read_timeout_impl(self)
       case 0:
          return INT2FIX(-1);
       case MAXDWORD:
+      case MAXDWORD - 1:
          return INT2FIX(0);
    }
 

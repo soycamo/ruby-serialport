@@ -1,5 +1,5 @@
-require "../serialport.so"
-
+require 'rubygems'
+require 'serialport'
 
 if ARGV.size < 4
   STDERR.print <<EOF

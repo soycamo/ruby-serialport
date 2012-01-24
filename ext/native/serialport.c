@@ -23,6 +23,10 @@
 VALUE cSerialPort; /* serial port class */
 
 VALUE sBaud, sDataBits, sStopBits, sParity; /* strings */
+VALUE sFlowControl, sReadTimeout;
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+VALUE sWriteTimeout;
+#endif
 VALUE sRts, sDtr, sCts, sDsr, sDcd, sRi;
 
 /*
@@ -44,14 +48,16 @@ static VALUE sp_create(class, _port)
  * ["data_bits"] Integer from 5 to 8 (4 is allowed on Windows too)
  * ["stop_bits"] An integer, only allowed values are 1 or 2 (1.5 is not supported)
  * ["parity"] One of the constants NONE, EVEN or ODD (Windows allows also MARK and SPACE)
+ * ["flow_control"] One of the constants NONE, SOFT, HARD, or HARD | SOFT (Hardware flow control not supported on all platforms)
+ * ["read_timeout"] An integer, read timeout in milliseconds (Rounded to nearest 100ms on POSIX platforms)
  *
  * When using separate arguments, they are interpreted as:
  * (baud, data_bits = 8, stop_bits = 1, parity = (previous_databits==8 ? NONE : EVEN))
  *
- * Nota: A baudrate of nil will keep the old value. The default parity depends on the
+ * Note: A baudrate of nil will keep the old value. The default parity depends on the
  * number of databits configured before this function call.
  */
-static VALUE sp_set_modem_params(argc, argv, self)
+VALUE sp_set_modem_params(argc, argv, self)
    int argc;
    VALUE *argv, self;
 {
@@ -65,7 +71,7 @@ static VALUE sp_set_modem_params(argc, argv, self)
  *
  * Note: Under Posix, this value is very approximate.
  */
-static VALUE sp_break(self, time)
+VALUE sp_break(self, time)
    VALUE self, time;
 {
    return sp_break_impl(self, time);
@@ -74,7 +80,7 @@ static VALUE sp_break(self, time)
 /*
  * Get the state (0 or 1) of the DTR line (not available on Windows)
  */
-static VALUE sp_get_dtr(self)
+VALUE sp_get_dtr(self)
    VALUE self;
 {
    return sp_get_dtr_impl(self);
@@ -83,7 +89,7 @@ static VALUE sp_get_dtr(self)
 /*
  * Get the flow control. The result is either NONE, HARD, SOFT or (HARD | SOFT)
  */
-static VALUE sp_get_flow_control(self)
+VALUE sp_get_flow_control(self)
    VALUE self;
 {
    return sp_get_flow_control_impl(self);
@@ -93,7 +99,7 @@ static VALUE sp_get_flow_control(self)
  * Get the timeout value (in milliseconds) for reading.
  * See SerialPort#set_read_timeout for details.
  */
-static VALUE sp_get_read_timeout(self)
+VALUE sp_get_read_timeout(self)
    VALUE self;
 {
    return sp_get_read_timeout_impl(self);
@@ -102,7 +108,7 @@ static VALUE sp_get_read_timeout(self)
 /*
  * Get the state (0 or 1) of the RTS line (not available on Windows)
  */
-static VALUE sp_get_rts(self)
+VALUE sp_get_rts(self)
    VALUE self;
 {
    return sp_get_rts_impl(self);
@@ -113,7 +119,7 @@ static VALUE sp_get_rts(self)
  *
  * Note: Under Posix, write timeouts are not implemented.
  */
-static VALUE sp_get_write_timeout(self)
+VALUE sp_get_write_timeout(self)
    VALUE self;
 {
    return sp_get_write_timeout_impl(self);
@@ -122,7 +128,7 @@ static VALUE sp_get_write_timeout(self)
 /*
  * Set the state (0 or 1) of the DTR line
  */
-static VALUE sp_set_dtr(self, val)
+VALUE sp_set_dtr(self, val)
    VALUE self, val;
 {
    return sp_set_dtr_impl(self, val);
@@ -135,7 +141,7 @@ static VALUE sp_set_dtr(self, val)
  *  SerialPort::HARD uses RTS/CTS handshaking; DSR/DTR is not
  *  supported.
  */
-static VALUE sp_set_flow_control(self, val)
+VALUE sp_set_flow_control(self, val)
    VALUE self, val;
 {
    return sp_set_flow_control_impl(self, val);
@@ -151,7 +157,7 @@ static VALUE sp_set_flow_control(self, val)
  *
  * Note: Read timeouts don't mix well with multi-threading.
  */
-static VALUE sp_set_read_timeout(self, val)
+VALUE sp_set_read_timeout(self, val)
    VALUE self, val;
 {
    return sp_set_read_timeout_impl(self, val);
@@ -160,7 +166,7 @@ static VALUE sp_set_read_timeout(self, val)
 /*
  * Set the state (0 or 1) of the RTS line
  */
-static VALUE sp_set_rts(self, val)
+VALUE sp_set_rts(self, val)
    VALUE self, val;
 {
    return sp_set_rts_impl(self, val);
@@ -171,7 +177,7 @@ static VALUE sp_set_rts(self, val)
  *
  * Note: Under Posix, write timeouts are not implemented.
  */
-static VALUE sp_set_write_timeout(self, val)
+VALUE sp_set_write_timeout(self, val)
    VALUE self, val;
 {
    return sp_set_write_timeout_impl(self, val);
@@ -179,7 +185,7 @@ static VALUE sp_set_write_timeout(self, val)
 
 /*
  */
-static void get_modem_params(self, mp)
+void get_modem_params(self, mp)
    VALUE self;
    struct modem_params *mp;
 {
@@ -189,7 +195,7 @@ static void get_modem_params(self, mp)
 /*
  * Set the baud rate, see SerialPort#set_modem_params for details.
  */
-static VALUE sp_set_data_rate(self, data_rate)
+VALUE sp_set_data_rate(self, data_rate)
    VALUE self, data_rate;
 {
    VALUE argv[4];
@@ -204,7 +210,7 @@ static VALUE sp_set_data_rate(self, data_rate)
 /*
  * Set the data bits, see SerialPort#set_modem_params for details.
  */
-static VALUE sp_set_data_bits(self, data_bits)
+VALUE sp_set_data_bits(self, data_bits)
    VALUE self, data_bits;
 {
    VALUE argv[4];
@@ -219,7 +225,7 @@ static VALUE sp_set_data_bits(self, data_bits)
 /*
  * Set the stop bits, see SerialPort#set_modem_params for details.
  */
-static VALUE sp_set_stop_bits(self, stop_bits)
+VALUE sp_set_stop_bits(self, stop_bits)
    VALUE self, stop_bits;
 {
    VALUE argv[4];
@@ -234,7 +240,7 @@ static VALUE sp_set_stop_bits(self, stop_bits)
 /*
  * Set the parity, see SerialPort#set_modem_params for details.
  */
-static VALUE sp_set_parity(self, parity)
+VALUE sp_set_parity(self, parity)
    VALUE self, parity;
 {
    VALUE argv[4];
@@ -249,7 +255,7 @@ static VALUE sp_set_parity(self, parity)
 /*
  * Get the current baud rate, see SerialPort#get_modem_params for details.
  */
-static VALUE sp_get_data_rate(self)
+VALUE sp_get_data_rate(self)
    VALUE self;
 {
    struct modem_params mp;
@@ -262,7 +268,7 @@ static VALUE sp_get_data_rate(self)
 /*
  * Get the current data bits, see SerialPort#get_modem_params for details.
  */
-static VALUE sp_get_data_bits(self)
+VALUE sp_get_data_bits(self)
    VALUE self;
 {
    struct modem_params mp;
@@ -275,7 +281,7 @@ static VALUE sp_get_data_bits(self)
 /*
  * Get the current stop bits, see SerialPort#get_modem_params for details.
  */
-static VALUE sp_get_stop_bits(self)
+VALUE sp_get_stop_bits(self)
    VALUE self;
 {
    struct modem_params mp;
@@ -288,7 +294,7 @@ static VALUE sp_get_stop_bits(self)
 /*
  * Get the current parity, see SerialPort#get_modem_params for details.
  */
-static VALUE sp_get_parity(self)
+VALUE sp_get_parity(self)
    VALUE self;
 {
    struct modem_params mp;
@@ -306,8 +312,11 @@ static VALUE sp_get_parity(self)
  * ["data_bits"] Integer from 5 to 8 (4 is possible on Windows too)
  * ["stop_bits"] Integer, 1 or 2 (1.5 is not supported)
  * ["parity"] One of the constants NONE, EVEN or ODD (on Windows may also MARK or SPACE)
+ * ["flow_control"] NONE, SOFT, HARD, or HARD + SOFT
+ * ["read_timeout"] Integer containing the read timeout
+ * ["write_timeout"] Integer containing the write timeout (Windows only)
  */
-static VALUE sp_get_modem_params(self)
+VALUE sp_get_modem_params(self)
    VALUE self;
 {
    struct modem_params mp;
@@ -321,6 +330,11 @@ static VALUE sp_get_modem_params(self)
    rb_hash_aset(hash, sDataBits, INT2FIX(mp.data_bits));
    rb_hash_aset(hash, sStopBits, INT2FIX(mp.stop_bits));
    rb_hash_aset(hash, sParity, INT2FIX(mp.parity));
+   rb_hash_aset(hash, sFlowControl, INT2FIX(mp.flow_control));
+   rb_hash_aset(hash, sReadTimeout, INT2FIX(mp.read_timeout));
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+   rb_hash_aset(hash, sWriteTimeout, INT2FIX(mp.write_timeout));
+#endif
 
    return hash;
 }
@@ -335,7 +349,7 @@ void get_line_signals_helper(obj, ls)
 /*
  * Get the state (0 or 1) of the CTS line
  */
-static VALUE sp_get_cts(self)
+VALUE sp_get_cts(self)
    VALUE self;
 {
    struct line_signals ls;
@@ -348,7 +362,7 @@ static VALUE sp_get_cts(self)
 /*
  * Get the state (0 or 1) of the DSR line
  */
-static VALUE sp_get_dsr(self)
+VALUE sp_get_dsr(self)
    VALUE self;
 {
    struct line_signals ls;
@@ -361,7 +375,7 @@ static VALUE sp_get_dsr(self)
 /*
  * Get the state (0 or 1) of the DCD line
  */
-static VALUE sp_get_dcd(self)
+VALUE sp_get_dcd(self)
    VALUE self;
 {
    struct line_signals ls;
@@ -374,7 +388,7 @@ static VALUE sp_get_dcd(self)
 /*
  * Get the state (0 or 1) of the RI line
  */
-static VALUE sp_get_ri(self)
+VALUE sp_get_ri(self)
    VALUE self;
 {
    struct line_signals ls;
@@ -390,7 +404,7 @@ static VALUE sp_get_ri(self)
  *
  * Note: Under Windows, the rts and dtr values are not included.
  */
-static VALUE sp_signals(self)
+VALUE sp_signals(self)
    VALUE self;
 {
    struct line_signals ls;
@@ -423,6 +437,12 @@ void Init_serialport()
    sDataBits = rb_str_new2("data_bits");
    sStopBits = rb_str_new2("stop_bits");
    sParity = rb_str_new2("parity");
+   sFlowControl = rb_str_new2("flow_control");
+   sReadTimeout = rb_str_new2("read_timeout");
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+   sWriteTimeout = rb_str_new2("write_timeout");
+#endif
+
    sRts = rb_str_new2("rts");
    sDtr = rb_str_new2("dtr");
    sCts = rb_str_new2("cts");
@@ -434,6 +454,12 @@ void Init_serialport()
    rb_gc_register_address(&sDataBits);
    rb_gc_register_address(&sStopBits);
    rb_gc_register_address(&sParity);
+   rb_gc_register_address(&sFlowControl);
+   rb_gc_register_address(&sReadTimeout);
+#if defined(OS_MSWIN) || defined(OS_BCCWIN) || defined(OS_MINGW)
+   rb_gc_register_address(&sWriteTimeout);
+#endif
+
    rb_gc_register_address(&sRts);
    rb_gc_register_address(&sDtr);
    rb_gc_register_address(&sCts);
